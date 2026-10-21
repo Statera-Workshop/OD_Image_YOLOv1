@@ -13,6 +13,7 @@ from pathlib import Path
 
 from common import config as C
 from common.darknet import weights_init_normal
+from common.precise_bn import recompute_bn_stats, wants_precise_bn
 from common.trainer import train
 from common.progress import queue_tag
 from common.utils import (banner, get_device, load_checkpoint, save_checkpoint, save_json, set_seed,
@@ -102,6 +103,8 @@ def main(mode, task, version, build_model):
             save_checkpoint(ckpt.with_name(ckpt.stem.rsplit("_e", 1)[0] + "_last.pth"), model,
                             {**meta, "epoch": epoch, "history": history}, overwrite=True)
             if test_set is not None and epoch % args.eval_interval == 0 and epoch < args.epochs:
+                if wants_precise_bn(model):    # [Unified] see common/precise_bn.py
+                    recompute_bn_stats(model, train_set, device, workers=args.workers, seed=args.seed + epoch)
                 res = t.evaluate(model, test_set, args, device)
                 point = {"epoch": epoch, **{k: v["summary"]["mAP"] for k, v in res.items()
                                             if isinstance(v, dict) and "summary" in v}}
@@ -112,6 +115,8 @@ def main(mode, task, version, build_model):
                 model.train()
 
         history = train(model, train_set, recipe, args, device, on_epoch_end)
+        if wants_precise_bn(model):            # [Unified] final weights are saved with recomputed BN statistics
+            recompute_bn_stats(model, train_set, device, workers=args.workers, seed=args.seed + args.epochs)
         save_checkpoint(ckpt, model, {**meta, "epoch": args.epochs, "history": history}, overwrite=args.overwrite)
         if args.skip_eval:
             return
